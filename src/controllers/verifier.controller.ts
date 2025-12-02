@@ -69,8 +69,13 @@ export class VerifierController {
     });
 
     for (const constraint of constraints) {
-      if (!consented.includes(constraint) && constraint !== 'credentialType') {
-        throw new Error(`Mandatory constraint ${constraint} not consented.`);
+      if (consented?.length > 0) {
+        if (
+          !consented.includes(constraint) &&
+          constraint !== 'credentialType'
+        ) {
+          throw new Error(`Mandatory constraint ${constraint} not consented.`);
+        }
       }
     }
 

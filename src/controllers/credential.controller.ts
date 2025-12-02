@@ -93,12 +93,17 @@ export class CredentialController {
         },
         trustedFramework: 'ebsi',
         payload: {
-          iat: Date.now() / 1000,
+          iat: Math.floor(Date.now() / 1000),
           iss: did.did,
           aud: issuerEndpoint,
           exp: Math.floor(Date.now() / 1000) + 300,
           nonce: c_nonce,
         },
+        iat: Math.floor(Date.now() / 1000),
+        iss: did.did,
+        aud: issuerEndpoint,
+        exp: Math.floor(Date.now() / 1000) + 300,
+        nonce: c_nonce,
         privateKey: did.privateKey,
       };
     } else {
