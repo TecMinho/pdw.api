@@ -63,13 +63,13 @@ npm run start
 ## ▶️ Build Docker
 
 ```
-docker build -t portuguese-digital-wallet-api .
+docker build -t pdw.api .
 ```
 
 ## ▶️ Run Docker
 
 ```
-docker run -p 8080:3000  -e PORT=3000 --name portuguese-digital-wallet-api portuguese-digital-wallet-api
+docker run -p 8080:3000  -e PORT=3000 --name pdw.api pdw.api
 ```
 
 | Parameter             | Description                                                                                                     | Example Usage                                                     |

@@ -1,5 +1,5 @@
 # Use official Node 24.11.0 image as base (LTS)
-FROM node:24.11.0
+FROM node:24-alpine
 
 # Set working directory inside the container
 WORKDIR /app
