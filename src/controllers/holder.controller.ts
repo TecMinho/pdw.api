@@ -23,7 +23,7 @@ export class HolderController {
    */
   @Get('get_new_did')
   async getNewDid(): Promise<EBSIDID> {
-    const { publicKey, privateKey } = await generateKeyPair('ES256');
+    const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
 
     const publicJwk = await exportJWK(publicKey);
     const privateJwk = await exportJWK(privateKey);
