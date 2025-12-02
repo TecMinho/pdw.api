@@ -1,8 +1,8 @@
 {
   "name": "ebsi-api-new",
-  "version": "0.0.1",
-  "description": "",
-  "author": "",
+  "version": "1.3.0",
+  "description": "PDW support API Service for EBSI Wallet",
+  "author": "TecMinho",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
