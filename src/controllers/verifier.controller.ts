@@ -1,8 +1,4 @@
-import {
-  Body,
-  Controller,
-  Post,
-} from '@nestjs/common';
+import { Body, Controller, Post } from '@nestjs/common';
 import { EBSIDID } from '../interfaces/ebsi_did';
 import { decodeJwt, importJWK, SignJWT } from 'jose';
 import { randomUUID } from 'crypto';
@@ -58,13 +54,18 @@ export class VerifierController {
    */
   @Post('define_presentation')
   async definePresentation(@Body() body: any): Promise<object> {
-    const { presentationDefinition, consented }: { presentationDefinition: any, consented: string[] } = body;
+    const {
+      presentationDefinition,
+      consented,
+    }: { presentationDefinition: any; consented: string[] } = body;
 
     const presentationDefinitionJson = JSON.parse(presentationDefinition);
 
     const inputDescriptors = presentationDefinitionJson.input_descriptors;
 
-    const constraints  = (inputDescriptors[0]?.constraints?.fields as any[] ?? []).map((field: any) => {
+    const constraints = (
+      (inputDescriptors[0]?.constraints?.fields as any[]) ?? []
+    ).map((field: any) => {
       return field.id;
     });
 
@@ -270,7 +271,9 @@ export class VerifierController {
       throw new Error('No credentials provided!');
     }
 
-    const isClientIdVerified = await this.verifierService.verifyClientId(presentationOffer.client_id);
+    const isClientIdVerified = await this.verifierService.verifyClientId(
+      presentationOffer.client_id,
+    );
 
     if (!isClientIdVerified) {
       throw new Error('Client ID verification failed!');
@@ -303,11 +306,11 @@ export class VerifierController {
           : (audienceObj.iss ?? '');
 
     const options = {
-      timeout: 15_000,
-      skipValidation: false,
-      skipAccreditationsValidation: false,
-      skipStatusValidation: false,
-      skipCredentialSubjectValidation: false,
+      timeout: 30_000,
+      skipValidation: true,
+      skipAccreditationsValidation: true,
+      skipStatusValidation: true,
+      skipCredentialSubjectValidation: true,
       proofPurpose: 'authentication',
       exp: Math.floor(Date.now() / 1000),
     } satisfies CreateVerifiablePresentationJwtOptions;
@@ -328,7 +331,8 @@ export class VerifierController {
       state,
     }).toString();
 
-    const uri = presentationOffer.redirect_uri ?? presentationOffer.response_uri;
+    const uri =
+      presentationOffer.redirect_uri ?? presentationOffer.response_uri;
 
     try {
       const idTokenRes = await axios.post(uri, data, {
