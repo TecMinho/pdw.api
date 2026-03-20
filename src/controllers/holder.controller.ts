@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { EbsiWallet } from '@cef-ebsi/wallet-lib';
 import { JsonWebKey } from 'did-resolver/lib/resolver';
-import { EBSIDID, EBSIDIDWithSeed } from '../interfaces/ebsi_did';
 import {
   createVerifiableCredentialJwt,
   EbsiIssuer,
@@ -15,78 +14,78 @@ import {
 } from '@cef-ebsi/verifiable-credential';
 import { ES256Signer } from 'did-jwt';
 import { config } from 'src/environment/issuers';
-import BIP32Factory from 'bip32';
-import * as ecc from 'tiny-secp256k1';
 import * as bip39 from 'bip39';
+import { createHash, randomUUID } from 'crypto';
+import { p256 } from '@noble/curves/nist.js';
+import { EBSIDID, EBSIDIDWithSeed } from '../interfaces/ebsi_did';
 
-/**
- * This endpoint handles holder DID operations.
- */
 @Controller('holder')
 export class HolderController {
-  private bip32;
-  constructor() {
-    this.bip32 = BIP32Factory(ecc);
-  }
-
   /**
-   * Generates a new EBSI DID with BIP-39 mnemonic seed using hierarchical deterministic derivation.
-   * This endpoint creates a random 128-bit entropy mnemonic, derives an ES256 key pair using BIP-32/BIP-44
-   * path m/44'/0'/0'/0/0, constructs public/private JWK from P-256 coordinates, and creates an EBSI DID
-   * for a NATURAL_PERSON. Returns the complete DID package including mnemonic seed and key material.
-   *
-   * @return {Promise<EBSIDIDWithSeed>} A Promise that resolves to an object containing the newly generated
-   * EBSI DID, BIP-39 mnemonic seed, private key (d parameter), and public key coordinates (x, y).
-   * Throws Error if public key derivation or JWK construction fails.
+   * Generates a new EBSI DID where the mnemonic is the real recovery source.
+   * The private/public P-256 keypair is deterministically derived from the mnemonic.
    */
-
   @Get('get_new_did')
   async getNewDid(): Promise<EBSIDIDWithSeed> {
     const mnemonic = bip39.generateMnemonic(128);
 
-    const seed = await bip39.mnemonicToSeed(mnemonic);
-    const root = this.bip32.fromSeed(seed);
-    const path = "m/44'/0'/0'/0/0";
-    const child = root.derivePath(path);
-    const privKeyBytes = child.privateKey!;
-
-    const publicKeyBytes = ecc.pointFromScalar(privKeyBytes, false);
-
-    if (!publicKeyBytes) {
-      throw new Error('Failed to derive public key');
-    }
-
-    const x = publicKeyBytes.slice(1, 33);
-    const y = publicKeyBytes.slice(33, 65);
+    const { x, y, d } = this.deriveP256JwkFromMnemonic(mnemonic);
 
     const publicJwk: JsonWebKey = {
       kty: 'EC',
       crv: 'P-256',
-      x: this.uint8ToBase64url(x),
-      y: this.uint8ToBase64url(y),
+      x,
+      y,
       key_ops: ['verify'],
-      ext: true,
-      alg: 'ES256',
     };
-
-    const privateJwk: JsonWebKey = {
-      ...publicJwk,
-      d: this.uint8ToBase64url(privKeyBytes),
-      key_ops: ['sign'],
-    };
-
-    if (!privateJwk.d || !publicJwk.x || !publicJwk.y) {
-      throw new Error('Invalid JWK');
-    }
 
     const ebsiDid = EbsiWallet.createDid('NATURAL_PERSON', publicJwk);
 
     return {
       did: ebsiDid,
       seed: mnemonic,
-      privateKey: privateJwk.d,
-      x: publicJwk.x!,
-      y: publicJwk.y!,
+      privateKey: d,
+      x,
+      y,
+    };
+  }
+
+  /**
+   * Recovers an EBSI DID from a BIP-39 mnemonic.
+   * Because the key pair is deterministically derived from the mnemonic, the resulting
+   * DID is always the same for the same mnemonic phrase.
+   *
+   * @param body - Request payload containing a `mnemonic` string.
+   * @returns A DID payload with the recovered `did`, original `seed` (mnemonic),
+   * derived `privateKey`, and public key coordinates (`x`, `y`).
+   * @throws {BadRequestException} When `mnemonic` is missing or not a valid BIP-39 phrase.
+   */
+  @Post('recover_did_from_seed')
+  async recoverDidFromSeed(
+    @Body() body: { mnemonic: string },
+  ): Promise<EBSIDIDWithSeed> {
+    if (!body?.mnemonic || !bip39.validateMnemonic(body.mnemonic)) {
+      throw new BadRequestException('Invalid mnemonic');
+    }
+
+    const { x, y, d } = this.deriveP256JwkFromMnemonic(body.mnemonic);
+
+    const publicJwk: JsonWebKey = {
+      kty: 'EC',
+      crv: 'P-256',
+      x,
+      y,
+      key_ops: ['verify'],
+    };
+
+    const ebsiDid = EbsiWallet.createDid('NATURAL_PERSON', publicJwk);
+
+    return {
+      did: ebsiDid,
+      seed: body.mnemonic,
+      privateKey: d,
+      x,
+      y,
     };
   }
 
@@ -102,15 +101,14 @@ export class HolderController {
    */
   @Post('get_did_credential')
   async getDidCredential(@Body() body: any): Promise<any> {
-    const {
-      did,
-    }: {
-      did: EBSIDID;
-    } = body;
+    const { did }: { did: EBSIDID } = body;
+
     const now = Math.floor(Date.now() / 1000);
-    const expirySeconds = 60 * 60 * 24 * 365; // seconds in 1 year
+    const expirySeconds = 60 * 60 * 24 * 365;
+
     const issuedAtIso = new Date(now * 1000).toISOString();
     const validUntilIso = new Date((now + expirySeconds) * 1000).toISOString();
+
     const schemaId =
       'https://api-conformance.ebsi.eu/trusted-schemas-registry/v3/schemas/zDpWGUBenmqXzurskry9Nsk6vq2R8thh9VSeoRqguoyMD';
 
@@ -164,87 +162,42 @@ export class HolderController {
   }
 
   /**
-   * Recovers an EBSI DID from a BIP-39 mnemonic seed phrase using hierarchical deterministic derivation.
-   * This endpoint derives an ES256 key pair from the mnemonic using BIP-32/BIP-44 path m/44'/0'/0'/0/0,
-   * validates the mnemonic, generates a public/private key pair, and creates an EBSI DID for a
-   * NATURAL_PERSON. Returns the DID, seed mnemonic, private key parameter, and public key coordinates.
-   *
-   * @param body - Request body containing the BIP-39 mnemonic seed phrase.
-   * @return {Promise<EBSIDIDWithSeed>} A Promise that resolves to an object containing the recovered
-   * EBSI DID, original mnemonic seed, private key (d parameter), and public key coordinates (x, y).
-   * Throws BadRequestException for invalid mnemonics or Error for public key derivation failures.
+   * Deterministically derives a valid P-256 private/public JWK from a mnemonic.
+   * Same mnemonic => same d, x, y => same DID.
    */
+  private deriveP256JwkFromMnemonic(mnemonic: string): {
+    d: string;
+    x: string;
+    y: string;
+  } {
+    const seed = bip39.mnemonicToSeedSync(mnemonic);
 
-  @Post('recover_did_from_seed')
-  async recoverDidFromSeed(
-    @Body() body: { mnemonic: string },
-  ): Promise<EBSIDIDWithSeed> {
-    const { mnemonic } = body;
+    let candidate = createHash('sha256').update(seed).digest();
 
-    if (!bip39.validateMnemonic(mnemonic)) {
-      throw new BadRequestException('Invalid mnemonic');
+    while (!p256.utils.isValidSecretKey(candidate)) {
+      candidate = createHash('sha256').update(candidate).digest();
     }
 
-    const seed = await bip39.mnemonicToSeed(mnemonic);
-    const root = this.bip32.fromSeed(seed);
-    const path = "m/44'/0'/0'/0/0";
-    const child = root.derivePath(path);
-    const privKeyBytes = child.privateKey!;
+    const privateKeyBytes = new Uint8Array(candidate);
 
-    const publicKeyBytes = ecc.pointFromScalar(privKeyBytes, false);
-    if (!publicKeyBytes) {
-      throw new Error('Failed to derive public key');
-    }
-
-    const x = publicKeyBytes.slice(1, 33);
-    const y = publicKeyBytes.slice(33, 65);
-
-    const publicJwk: JsonWebKey = {
-      kty: 'EC',
-      crv: 'P-256',
-      x: this.uint8ToBase64url(x),
-      y: this.uint8ToBase64url(y),
-      key_ops: ['verify'],
-      ext: true,
-      alg: 'ES256',
-    };
-
-    const privateJwk: JsonWebKey = {
-      ...publicJwk,
-      d: this.uint8ToBase64url(privKeyBytes),
-      key_ops: ['sign'],
-    };
-
-    const ebsiDid = EbsiWallet.createDid('NATURAL_PERSON', publicJwk);
+    const publicKey = p256.getPublicKey(privateKeyBytes, false);
+    const xBytes = publicKey.slice(1, 33);
+    const yBytes = publicKey.slice(33, 65);
 
     return {
-      did: ebsiDid,
-      seed: mnemonic,
-      privateKey: privateJwk.d!,
-      x: publicJwk.x!,
-      y: publicJwk.y!,
+      d: Buffer.from(privateKeyBytes).toString('base64url'),
+      x: Buffer.from(xBytes).toString('base64url'),
+      y: Buffer.from(yBytes).toString('base64url'),
     };
   }
 
   private generateUuid(): string {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
-      const rand = (Math.random() * 16) | 0;
-      const value = char === 'x' ? rand : (rand & 0x3) | 0x8;
-      return value.toString(16);
-    });
+    return randomUUID();
   }
+
   private base64UrlToBytes(value: string): Uint8Array {
     const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
     return Uint8Array.from(Buffer.from(padded, 'base64'));
-  }
-
-  private uint8ToBase64url(bytes: Uint8Array): string {
-    let binary = '';
-    bytes.forEach((b) => (binary += String.fromCharCode(b)));
-    return btoa(binary)
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=/g, '');
   }
 }
