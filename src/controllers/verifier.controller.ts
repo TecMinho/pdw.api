@@ -12,7 +12,39 @@ import {
 import { config } from '../environment/issuers';
 import axios from 'axios';
 import { VerifierService } from '../services/verifier.service';
+import { createHash, createPublicKey } from 'crypto';
+import { SDJwtVcInstance } from '@sd-jwt/sd-jwt-vc';
+import type { PresentationFrame, Verifier } from '@sd-jwt/core';
 
+function buildSdJwtPresentationFrame(
+  selectedFields: string[],
+): PresentationFrame<Record<string, unknown>> {
+  const frame: Record<string, any> = {};
+
+  for (const field of selectedFields) {
+    const parts = field.split('.');
+
+    if (parts[0] === 'achieved') {
+      frame.achieved ??= {};
+      frame.achieved['0'] = true;
+      continue;
+    }
+
+    let current = frame;
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index];
+
+      if (index === parts.length - 1) {
+        current[part] = true;
+      } else {
+        current[part] ??= {};
+        current = current[part];
+      }
+    }
+  }
+
+  return frame;
+}
 /**
  * Handles the OpenID compliant verification process of a Verifiable Credential.
  */
@@ -62,21 +94,35 @@ export class VerifierController {
     const presentationDefinitionJson = JSON.parse(presentationDefinition);
 
     const inputDescriptors = presentationDefinitionJson.input_descriptors;
+    const constraints =
+      (inputDescriptors[0]?.constraints?.fields as any[]) ?? [];
 
-    const constraints = (
-      (inputDescriptors[0]?.constraints?.fields as any[]) ?? []
-    ).map((field: any) => {
-      return field.id;
-    });
+    const consentedSet = new Set(consented ?? []);
 
     for (const constraint of constraints) {
-      if (consented?.length > 0) {
-        if (
-          !consented.includes(constraint) &&
-          constraint !== 'credentialType'
-        ) {
-          throw new Error(`Mandatory constraint ${constraint} not consented.`);
-        }
+      const constraintId = constraint?.id;
+
+      if (!constraintId || constraintId === 'credentialType') {
+        continue;
+      }
+
+      const paths: string[] = Array.isArray(constraint?.path)
+        ? constraint.path
+        : [];
+
+      const isCredentialSubjectField = paths.some(
+        (path) =>
+          path.startsWith('$.credentialSubject.') ||
+          path.startsWith('$.vc.credentialSubject.') ||
+          path.startsWith('$.'),
+      );
+
+      if (!isCredentialSubjectField) {
+        continue;
+      }
+
+      if (consentedSet.size > 0 && !consentedSet.has(constraintId)) {
+        throw new Error(`Mandatory constraint ${constraintId} not consented.`);
       }
     }
 
@@ -123,12 +169,14 @@ export class VerifierController {
       request,
       redirectEndpoint,
       did,
+      selectedFields = [],
     }: {
       presentationSubmission: any;
       credentials: any;
       request: any;
       redirectEndpoint: string;
       did: EBSIDID;
+      selectedFields?: string[];
     } = body;
 
     if (!credentials) {
@@ -247,17 +295,19 @@ export class VerifierController {
    */
   @Post('issue_presentation')
   async issuePresentation(@Body() body: any): Promise<boolean> {
-    const {
-      presentationOffer,
-      presentationSubmission,
-      did,
-      credentials,
-    }: {
-      presentationOffer: any;
-      presentationSubmission: any;
-      did: EBSIDID;
-      credentials: any[];
-    } = body;
+ const {
+   presentationOffer,
+   presentationSubmission,
+   did,
+   credentials,
+   selectedFields = [],
+ }: {
+   presentationOffer: any;
+   presentationSubmission: any;
+   did: EBSIDID;
+   credentials: any[];
+   selectedFields?: string[];
+ } = body;
 
     if (!presentationSubmission) {
       throw new Error('No presentation submission provided!');
@@ -286,44 +336,123 @@ export class VerifierController {
       signer: ES256Signer(base64ToBytes(did.privateKey)),
     } satisfies EbsiIssuer;
 
-    const vp = {
-      '@context': ['https://www.w3.org/2018/credentials/v1'],
-      id: `urn:uuid:${randomUUID()}`,
-      type: ['VerifiablePresentation'],
-      holder: did.did,
-      verifiableCredential: credentials.map((credential: any) => {
-        return credential.jwt;
-      }),
-    } satisfies EbsiVerifiablePresentation;
+    const firstCredentialJwt = credentials[0]?.jwt;
 
-    const audienceObj = decodeJwt(credentials[0].jwt);
-
-    const audience =
-      typeof audienceObj?.aud === 'string'
-        ? audienceObj.aud
-        : typeof audienceObj?.aud === 'object'
-          ? audienceObj.aud[0]
-          : (audienceObj.iss ?? '');
-
-    const options = {
-      timeout: 30_000,
-      skipValidation: true,
-      skipAccreditationsValidation: true,
-      skipStatusValidation: true,
-      skipCredentialSubjectValidation: true,
-      proofPurpose: 'authentication',
-      exp: Math.floor(Date.now() / 1000),
-    } satisfies CreateVerifiablePresentationJwtOptions;
+    if (!firstCredentialJwt) {
+      throw new Error('No credential JWT provided!');
+    }
 
     const state = presentationOffer.state;
 
-    const vpToken = await createVerifiablePresentationJwt(
-      vp,
-      holder,
-      audience,
-      config,
-      options,
-    );
+    const isSdJwt = firstCredentialJwt.includes('~');
+
+    let vpToken: string;
+
+    if (isSdJwt) {
+      const hasher = async (
+        data: string | ArrayBuffer,
+        algorithm: string,
+      ): Promise<Uint8Array> => {
+        if (algorithm !== 'sha-256') {
+          throw new Error(`Unsupported hash algorithm: ${algorithm}`);
+        }
+
+        const buffer =
+          typeof data === 'string' ? Buffer.from(data) : Buffer.from(data);
+
+        return Uint8Array.from(createHash('sha256').update(buffer).digest());
+      };
+
+      const verifier: Verifier = async () => true;
+
+      const sdjwt = new SDJwtVcInstance({
+        verifier,
+        hasher,
+        hashAlg: 'sha-256',
+      });
+
+      const presentationFrame = buildSdJwtPresentationFrame(selectedFields);
+
+      const presentedCredential = await sdjwt.present(
+        firstCredentialJwt,
+        presentationFrame,
+      );
+
+      const privateKey = await importJWK(
+        {
+          crv: 'P-256',
+          kty: 'EC',
+          x: did.x,
+          y: did.y,
+          d: did.privateKey,
+          alg: 'ES256',
+          kid: `${did.did}#${did.did.slice(8)}`,
+        },
+        'ES256',
+      );
+
+      const now = Math.floor(Date.now() / 1000);
+
+      vpToken = await new SignJWT({
+        iss: did.did,
+        aud: presentationOffer.client_id,
+        sub: did.did,
+        iat: now,
+        nbf: now,
+        exp: now + 300,
+        nonce: presentationOffer.nonce,
+        vp: {
+          '@context': ['https://www.w3.org/2018/credentials/v1'],
+          id: `urn:uuid:${randomUUID()}`,
+          type: ['VerifiablePresentation'],
+          holder: did.did,
+          verifiableCredential: [presentedCredential],
+        },
+      })
+        .setProtectedHeader({
+          alg: 'ES256',
+          typ: 'JWT',
+          kid: `${did.did}#${did.did.slice(8)}`,
+        })
+        .sign(privateKey);
+    } else {
+      const vp = {
+        '@context': ['https://www.w3.org/2018/credentials/v1'],
+        id: `urn:uuid:${randomUUID()}`,
+        type: ['VerifiablePresentation'],
+        holder: did.did,
+        verifiableCredential: credentials.map((credential: any) => {
+          return credential.jwt;
+        }),
+      } satisfies EbsiVerifiablePresentation;
+
+      const audienceObj = decodeJwt(firstCredentialJwt);
+
+      const audience =
+        typeof audienceObj?.aud === 'string'
+          ? audienceObj.aud
+          : typeof audienceObj?.aud === 'object'
+            ? audienceObj.aud[0]
+            : (audienceObj.iss ?? '');
+
+      const options = {
+        timeout: 30_000,
+        skipValidation: true,
+        skipAccreditationsValidation: true,
+        skipStatusValidation: true,
+        skipCredentialSubjectValidation: true,
+        proofPurpose: 'authentication',
+        exp: Math.floor(Date.now() / 1000),
+      } satisfies CreateVerifiablePresentationJwtOptions;
+
+      vpToken = await createVerifiablePresentationJwt(
+        vp,
+        holder,
+        audience,
+        config,
+        options,
+      );
+    }
 
     const data = new URLSearchParams({
       vp_token: vpToken,

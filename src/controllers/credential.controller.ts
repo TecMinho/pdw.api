@@ -48,6 +48,8 @@ export class CredentialController {
       did,
       state,
       deferred = false,
+      format,
+      credential_configuration_id,
     }: {
       accessToken: string;
       types: string[];
@@ -58,9 +60,9 @@ export class CredentialController {
       did: EBSIDID;
       state?: string;
       deferred?: boolean;
+      format?: string;
+      credential_configuration_id?: string;
     } = body;
-
-    let jwtPayload: any;
 
     const privateKey = await importJWK(
       {
@@ -85,36 +87,7 @@ export class CredentialController {
       throw new Error('No nonce found in access token!');
     }
 
-    if (!jwt) {
-      jwtPayload = {
-        header: {
-          typ: 'openid4vci-proof+jwt',
-          kid: `${did.did}#${did.did.slice(8)}`,
-        },
-        trustedFramework: 'ebsi',
-        payload: {
-          iat: Math.floor(Date.now() / 1000),
-          iss: did.did,
-          aud: issuerEndpoint,
-          exp: Math.floor(Date.now() / 1000) + 300,
-          nonce: c_nonce,
-        },
-        iat: Math.floor(Date.now() / 1000),
-        iss: did.did,
-        aud: issuerEndpoint,
-        exp: Math.floor(Date.now() / 1000) + 300,
-        nonce: c_nonce,
-        privateKey: did.privateKey,
-      };
-    } else {
-      jwtPayload = {
-        ...decodeJwt(jwt),
-        nonce: c_nonce,
-      };
-    }
-
     const updatedJwt = await new SignJWT({
-      ...jwtPayload,
       nonce: c_nonce,
     })
       .setProtectedHeader({
@@ -125,30 +98,38 @@ export class CredentialController {
       .setIssuedAt()
       .setExpirationTime('5m')
       .setAudience(issuerEndpoint)
-      .setIssuer(jwt ? jwtPayload.aud : jwtPayload.iss)
-      .setSubject(jwtPayload.sub)
+      .setIssuer(did.did)
       .sign(privateKey);
 
-    const credentialsRes = await fetch(credentialEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        types,
-        format: 'jwt_vc',
-        proof: {
-          proof_type: 'jwt',
-          jwt: updatedJwt,
-        },
-        state,
-      }),
-    });
+   const credentialsRes = await fetch(credentialEndpoint, {
+     method: 'POST',
+     headers: {
+       'Content-Type': 'application/json',
+       Authorization: `Bearer ${accessToken}`,
+     },
+     body: JSON.stringify({
+       types,
+       format: format === 'jwt_vc_json' ? 'jwt_vc' : format,
+       credential_configuration_id,
+       proof: {
+         proof_type: 'jwt',
+         jwt: updatedJwt,
+       },
+       state,
+     }),
+   });
 
-    if (!credentialsRes.ok) {
-      throw new Error('Unable to issue a credential!');
-    }
+   if (!credentialsRes.ok) {
+     const errorText = await credentialsRes.text();
+     console.error(
+       'Credential endpoint error:',
+       credentialsRes.status,
+       errorText,
+     );
+     throw new Error(
+       `Unable to issue a credential! Status: ${credentialsRes.status} - ${errorText}`,
+     );
+   }
 
     if (!deferred) {
       return await credentialsRes.json();
