@@ -30,6 +30,7 @@
     "@nestjs/core": "^11.1.12",
     "@nestjs/platform-express": "^11.1.12",
     "@noble/curves": "^2.0.1",
+    "@sd-jwt/sd-jwt-vc": "^0.20.0",
     "axios": "^1.13.4",
     "bip32": "^5.0.1",
     "bip39": "^3.1.0",
