@@ -1,6 +1,6 @@
 {
   "name": "ebsi-api-pdw",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "PDW support API Service for EBSI Wallet",
   "author": "TecMinho",
   "private": true,
