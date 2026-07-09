@@ -97,34 +97,42 @@ export class VerifierController {
     const constraints =
       (inputDescriptors[0]?.constraints?.fields as any[]) ?? [];
 
-    const consentedSet = new Set(consented ?? []);
+  const consentedSet = new Set(consented ?? []);
 
-    for (const constraint of constraints) {
-      const constraintId = constraint?.id;
+  for (const constraint of constraints) {
+    const constraintId = constraint?.id;
 
-      if (!constraintId || constraintId === 'credentialType') {
-        continue;
-      }
-
-      const paths: string[] = Array.isArray(constraint?.path)
-        ? constraint.path
-        : [];
-
-      const isCredentialSubjectField = paths.some(
-        (path) =>
-          path.startsWith('$.credentialSubject.') ||
-          path.startsWith('$.vc.credentialSubject.') ||
-          path.startsWith('$.'),
-      );
-
-      if (!isCredentialSubjectField) {
-        continue;
-      }
-
-      if (consentedSet.size > 0 && !consentedSet.has(constraintId)) {
-        throw new Error(`Mandatory constraint ${constraintId} not consented.`);
-      }
+    if (!constraintId || constraintId === 'credentialType') {
+      continue;
     }
+
+    const paths: string[] = Array.isArray(constraint?.path)
+      ? constraint.path
+      : [];
+
+    const isCredentialSubjectField = paths.some(
+      (path) =>
+        path.startsWith('$.credentialSubject.') ||
+        path.startsWith('$.vc.credentialSubject.') ||
+        path.startsWith('$.'),
+    );
+
+    if (!isCredentialSubjectField) {
+      continue;
+    }
+    
+   const isConsented =
+     consentedSet.has(constraintId) ||
+     Array.from(consentedSet).some(
+       (consentedField) =>
+         constraintId.startsWith(`${consentedField}.`) ||
+         consentedField.startsWith(`${constraintId}.`),
+     );
+
+   if (consentedSet.size > 0 && !isConsented) {
+     throw new Error(`Mandatory constraint ${constraintId} not consented.`);
+   }
+  }
 
     return {
       id: Math.random().toString(36).substring(2, 10),
