@@ -1,10 +1,17 @@
 {
   "name": "ebsi-api-pdw",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "PDW support API Service for EBSI Wallet",
-  "author": "TecMinho",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
+  "authors": [
+      {
+          "name": "TecMinho",
+          "email": "ti@tecminho.uminho.pt",
+          "homepage": "https://www.tecminho.uminho.pt",
+          "role": "Developer"
+      }
+  ],
   "scripts": {
     "build": "nest build --config tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
